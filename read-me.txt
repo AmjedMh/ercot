@@ -1,0 +1,33 @@
+This document consists of steps to configure ERCOR API APP on Java. 
+
+Assumption
+1.	You have machine in USA region
+2.	You have certificate ZIP files provided from ERCOT
+3.	Java 11 is installed. 
+4.	Maven 3 or higher is installed
+5.	%JAVA_HOME%/bin and %M2_HOME%/bin is added in system properties
+
+1.	Export ercot_client.zip file provided. Extracted folder should have below folder structure
+a.	ercot – Source code
+b.	Certificates.zip   (Replace this file if you want to renew certificates)
+c.	GlobalSign RSA Organization Validation CA – 2018.crt
+d.	ERCOT_CA.crt
+e.	GlobalSign Root R3.crt
+f.	bin folder 
+
+Open command prompt and execute below commands
+
+keytool -importkeystore -srckeystore ZachAPICert.pfx -srcstoretype pkcs12 -srcstorepass pwd4Zach -srcalias "zach qse" -destkeystore bin/clientcert.jks -deststoretype jks -deststorepass pwd4Zach -destalias clientcert -noprompt
+keytool -importkeystore -srckeystore "Zach API CP Cert - pwd4Zach.pfx" -srcstoretype pkcs12 -srcstorepass pwd4Zach -srcalias "zach cp" -destkeystore bin/clientcert_cp.jks -deststoretype jks -deststorepass pwd4Zach -destalias clientcert_cp -noprompt
+keytool -import -file "GlobalSign RSA Organization Validation CA - 2018.cer" -alias VeriSignUniversalRootCertificationAuthority -keystore bin/truststore.jks -storepass changeit -noprompt 
+keytool -import -file "GlobalSign Root R3.cer" -alias GlobalSignRootR3 -keystore bin/truststore.jks -storepass changeit  -noprompt 
+keytool -import -file "ERCOT_CA.cer" -alias ERCOT_CA -keystore bin/truststore.jks -storepass changeit  -noprompt 
+cd ercot
+mvn clean compile install
+cd target
+cp ercot.jar ../../bin/ercot.jar
+
+5.	Update application.properties and application-cp.properties path
+6.	Go to bin folder and run ercot.bat
+7.	Also run ercot_cp.bat
+

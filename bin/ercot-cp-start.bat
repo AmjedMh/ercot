@@ -1,0 +1,1 @@
+java -Dspring.config.additional-location="application-cp.properties" -jar ercot.jar 
