@@ -2,6 +2,7 @@ package com.ercot.cp.ews.config.service.impl;
 
 import com.ercot.cp.ews.config.domin.RTMReport;
 import com.ercot.cp.ews.config.dto.RTMReportDTO;
+import com.ercot.cp.ews.config.constants.ConstantCodes;
 import com.ercot.cp.ews.config.repository.RTMReportDataRepository;
 import com.ercot.cp.ews.config.service.RTMReportService;
 import com.ercot.cp.ews.config.transformer.RTMReportTransformer;
@@ -27,11 +28,20 @@ public class RTMReportServiceImpl implements RTMReportService {
         reportRows.forEach(reportRow -> {
             final var row = ((RTMReportDTO) reportRow);
 
+            Integer integer = ConstantCodes.sPPNodesMap
+                                       .get(row.getSettlementPoint());
+            if (integer == null) {
+                
+                //log.debug("skip Settlement : {}", row.getSettlementPoint());
+                return ;
+            }
+
             boolean bPointType = row.getSettlementPointType()
                                     .endsWith("EW");
             if (bPointType) return;
 
             RTMReport rtmReport = rtmReportTransformer.toEntity(row);
+            
             rtmReportList.add(rtmReport);
         });
 

@@ -28,5 +28,7 @@ public class SystemConfiguration {
     private String certificateFileName;
     private String securityPolicyFileName;
 
+    private String userID;
+
     private List<ReportConfig> reports;
 }

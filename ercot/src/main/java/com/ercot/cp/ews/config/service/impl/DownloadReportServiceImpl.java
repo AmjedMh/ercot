@@ -47,9 +47,11 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.text.SimpleDateFormat;
 import java.time.LocalDateTime;
 import java.time.Period;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.TemporalAmount;
 import java.util.Arrays;
@@ -67,14 +69,14 @@ import java.util.zip.ZipFile;
 import static com.ercot.cp.ews.config.constants.ConstantCodes.DOWNLOAD_REPORT;
 import static com.ercot.cp.ews.config.constants.ConstantCodes.REPORT_CLASS;
 import static java.lang.Boolean.TRUE;
-
+import java.text.ParseException;
 @Log4j2
 @Service
 @RequiredArgsConstructor
 public class DownloadReportServiceImpl implements DownloadReportService {
 
     private static final String _get = "get";
-    private static final String soap_address = "https://misapi.ercot.com/2007-08/Nodal/eEDS/EWS/";
+    private static final String soap_address = "https://misapi.ercot.com/NodalAPI/EWS/";
     private static final String soap_action_market_info = "/BusinessService/NodalService.serviceagent/HttpEndPoint/MarketInfo";
 
     private final EwsClient ewsClient;
@@ -99,7 +101,12 @@ public class DownloadReportServiceImpl implements DownloadReportService {
     }
 
     private <T> void zipReport(String reportName, String fileNameDirectory) {
+        log.debug("Inside zipReport reportName: {} fileNameDirectory: {}", reportName, fileNameDirectory);
         Class<T> aClass = REPORT_CLASS.get(reportName);
+        if (aClass == null) {
+            log.debug("No DTO mapping found for reportName: {} - skipping zipReport for: {}", reportName, fileNameDirectory);
+            return;
+        }
         List<T> reportRows;
 
         try (ZipFile zip = new ZipFile(fileNameDirectory)) {
@@ -134,7 +141,7 @@ public class DownloadReportServiceImpl implements DownloadReportService {
 
         if (expectedSize != lSize) {
             InputStream in = new URL(url).openStream();
-            long lSizeDownload = Files.copy(in, Paths.get(filePath));
+            long lSizeDownload = Files.copy(in, Paths.get(filePath), StandardCopyOption.REPLACE_EXISTING);
             log.debug("lSizeDownload: {}", lSizeDownload);
 
             if (report.getFileName().contains("xml") || !REPORT_CLASS.containsKey(report.getReportGroup())) {
@@ -186,7 +193,9 @@ public class DownloadReportServiceImpl implements DownloadReportService {
         log.debug("Inside downloadReport reportName: {}", reportConfig.getName());
 
         try {
-            ResponseMessage responseMessage = ewsClient.callEWS(soap_address, soap_action_market_info, formRequest(reportConfig));
+            RequestMessage requestRequest = formRequest(reportConfig);
+            System.out.println("after request creation !!");
+            ResponseMessage responseMessage = ewsClient.callEWS(soap_address, soap_action_market_info, requestRequest);
             List<Element> elementList = responseMessage.getPayload().getAny();
 
             if (elementList == null || elementList.isEmpty()) {
@@ -234,7 +243,8 @@ public class DownloadReportServiceImpl implements DownloadReportService {
             reportFiles.forEach(reportFile -> threadPoolExecutor.execute(() -> {
                 String fileNameDirectory = finalBaseDirectory + "/" + reportFile;
 
-                if (reportFile.endsWith(".zip")) {
+                if (reportFile.endsWith(".zip") || reportFile.endsWith("_csv")) {
+                    // .zip files and ERCOT extensionless _csv files are both zip-compressed
                     zipReport(reportData.getReportName(), fileNameDirectory);
                 } else {
                     csvReport(reportData.getReportName(), fileNameDirectory);
@@ -246,7 +256,12 @@ public class DownloadReportServiceImpl implements DownloadReportService {
     }
 
     private <T> void csvReport(String reportName, String fileNameDirectory) {
+        log.debug("Inside csvReport reportName: {} fileNameDirectory: {}", reportName, fileNameDirectory);
         Class<T> aClass = REPORT_CLASS.get(reportName);
+        if (aClass == null) {
+            log.debug("No DTO mapping found for reportName: {} - skipping csvReport for: {}", reportName, fileNameDirectory);
+            return;
+        }
         List<T> reportRows;
         try {
             InputStream inputStream = new FileInputStream(fileNameDirectory);
@@ -287,7 +302,11 @@ public class DownloadReportServiceImpl implements DownloadReportService {
         File directory = new File(directoryPath);
 
         if (directory.exists() && directory.isDirectory()) {
-            return Arrays.asList(Objects.requireNonNull(directory.list((dir, name) -> (name.contains("csv") && name.endsWith(".zip")) || name.toLowerCase().endsWith(".csv"))));
+            return Arrays.asList(Objects.requireNonNull(directory.list((dir, name) ->
+                name.endsWith(".zip")          // standard .zip
+                || name.endsWith(".csv")        // standard .csv
+                || name.endsWith("_csv")        // ERCOT extensionless csv-zip (e.g. ..._0000_csv)
+            )));
         } else {
             log.debug("Directory not found: {}", directoryPath);
             return List.of();
@@ -302,41 +321,74 @@ public class DownloadReportServiceImpl implements DownloadReportService {
     }
 
     private RequestMessage formRequest(ReportConfig reportConfig) throws DatatypeConfigurationException {
-
+        // 1) Prepare a CST‐timezone calendar
         GregorianCalendar cal = new GregorianCalendar(TimeZone.getTimeZone("CST"));
-        cal.setTime(new Date());
 
-        RequestMessage request = new RequestMessage();
+        // 2) If startDate is provided (non‐null, non‐empty), parse it; else use “now – buffer”
+        String userStartStr = reportConfig.getStartDate();
+        if (userStartStr != null && !userStartStr.trim().isEmpty()) {
+            // Expecting ISO‐8601 without timezone, e.g. "2025-05-01T00:00:00"
+            SimpleDateFormat sdfInput = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss");
+            // Interpret the input as UTC
+            sdfInput.setTimeZone(TimeZone.getTimeZone("UTC"));
+            try {
+                Date parsed = sdfInput.parse(userStartStr);
+                // Set that UTC‐instant into our CST calendar
+                cal.setTime(parsed);
+            } catch (ParseException e) {
+                // Parsing failed → fallback to (now – buffer)
+                log.error("Error parsing userStartStr: {}. Falling back to (now – buffer). Exception: {}", userStartStr, e.getMessage(), e);
+                cal.setTime(new Date());
+                cal.add(GregorianCalendar.MINUTE, -1 * reportConfig.getBuffer());
+            }
+        } else {
+            // No user‐supplied startDate → (now – buffer)
+            cal.setTime(new Date());
+            cal.add(GregorianCalendar.MINUTE, -1 * reportConfig.getBuffer());
+        }
 
+        // 3) Build WS‐Security “Created” timestamp = now in CST
+        ZoneId cstZone = ZoneId.of("CST", ZoneId.SHORT_IDS);
+        GregorianCalendar calCreated = GregorianCalendar.from(
+            java.time.ZonedDateTime.now(cstZone)
+        );
+        SimpleDateFormat sdfCreated = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss");
+        sdfCreated.setTimeZone(TimeZone.getTimeZone("CST"));
+        String createdStr = sdfCreated.format(calCreated.getTime());
+
+        // 4) Construct the SOAP Header
         HeaderType requestHeader = new HeaderType();
         AttributedDateTime created = new AttributedDateTime();
 
-        SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss");
-        format.setTimeZone(TimeZone.getTimeZone("CST"));
-
         requestHeader.setVerb(_get);
         requestHeader.setNoun("Reports");
-        requestHeader.setSource("API_ZHINES@QRFNEN");
-        requestHeader.setUserID("API_ZHINES");
+        String userId = systemConfiguration.getUserID();
+        requestHeader.setSource(userId + "@QLONCA");
+        requestHeader.setUserID(userId);
 
         ReplayDetectionType rdt = new ReplayDetectionType();
         EncodedString nonce = new EncodedString();
         nonce.setValue(UUID.randomUUID().toString());
         rdt.setNonce(nonce);
-        created.setValue(format.format(cal.getTime()));
+        created.setValue(createdStr);
         rdt.setCreated(created);
         requestHeader.setReplayDetection(rdt);
         requestHeader.setRevision(UUID.randomUUID().toString());
 
-        RequestType requestRequest = new RequestType();
-        cal.add(GregorianCalendar.MINUTE, -1 * reportConfig.getBuffer());
-        XMLGregorianCalendar xCal = DatatypeFactory.newInstance().newXMLGregorianCalendar(cal);
-        requestRequest.setStartTime(xCal);
-        requestRequest.setOption(reportConfig.getId());
+        // 5) Construct the <Request> body with <StartTime>
+        XMLGregorianCalendar xCalStart = DatatypeFactory
+            .newInstance()
+            .newXMLGregorianCalendar(cal);
+        RequestType requestBody = new RequestType();
+        requestBody.setStartTime(xCalStart);
+        requestBody.setOption(reportConfig.getId());
 
+        // 6) Wrap into RequestMessage
+        RequestMessage request = new RequestMessage();
         request.setHeader(requestHeader);
-        request.setRequest(requestRequest);
-
+        request.setRequest(requestBody);
         return request;
     }
+
+
 }

@@ -17,8 +17,8 @@ f.	bin folder
 
 Open command prompt and execute below commands
 
-keytool -importkeystore -srckeystore ZachAPICert.pfx -srcstoretype pkcs12 -srcstorepass pwd4Zach -srcalias "zach qse" -destkeystore bin/clientcert.jks -deststoretype jks -deststorepass pwd4Zach -destalias clientcert -noprompt
-keytool -importkeystore -srckeystore "Zach API CP Cert - pwd4Zach.pfx" -srcstoretype pkcs12 -srcstorepass pwd4Zach -srcalias "zach cp" -destkeystore bin/clientcert_cp.jks -deststoretype jks -deststorepass pwd4Zach -destalias clientcert_cp -noprompt
+keytool -importkeystore -srckeystore '1194326882000$API_TSQM1.pfx' -srcstoretype pkcs12 -srcstorepass 'uiOF5$WOg0tRf' -srcalias 'lcp_m1' -destkeystore bin/clientcert.jks -deststoretype jks -deststorepass 'uiOF5$WOg0tRf' -destalias clientcert -noprompt
+keytool -importkeystore -srckeystore '1194326882000$API_TSQSUB1.pfx' -srcstoretype pkcs12 -srcstorepass 'npOT##I1BqYjJ' -srcalias 'tsq_sub1' -destkeystore bin/clientcert_cp.jks -deststoretype jks -deststorepass 'npOT##I1BqYjJ' -destalias clientcert_cp -noprompt
 keytool -import -file "GlobalSign RSA Organization Validation CA - 2018.cer" -alias VeriSignUniversalRootCertificationAuthority -keystore bin/truststore.jks -storepass changeit -noprompt 
 keytool -import -file "GlobalSign Root R3.cer" -alias GlobalSignRootR3 -keystore bin/truststore.jks -storepass changeit  -noprompt 
 keytool -import -file "ERCOT_CA.cer" -alias ERCOT_CA -keystore bin/truststore.jks -storepass changeit  -noprompt 

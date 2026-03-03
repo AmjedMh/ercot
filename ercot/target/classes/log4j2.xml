@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="error">
+    <Properties>
+        <Property name="log-path">/opt/dft/logs</Property>
+    </Properties>
+    <Appenders>
+        <Console name="console" target="SYSTEM_OUT">
+            <PatternLayout pattern="%d{dd/MMM/yyyy HH:mm:ss.SSS}- %c{1}: %m%n"/>
+        </Console>
+        <RollingFile name="tasks" fileName="${log-path}/ercot.log"
+                     filePattern="${log-path}/ercot-%d{yyyy-MM-dd}-%i.log">
+            <PatternLayout>
+                <pattern>%d{dd/MMM/yyyy HH:mm:ss.SSS}- %c{1}: %m%n</pattern>
+            </PatternLayout>
+            <Policies>
+                <TimeBasedTriggeringPolicy interval="1" modulate="true" />
+            </Policies>
+            <DefaultRolloverStrategy max="100">
+                <Delete basePath="${log-path}" maxDepth="1">
+                    <IfAll>
+                        <IfFileName glob="ercot*"/>
+                        <IfLastModified age="5d"/>
+                    </IfAll>
+                </Delete>
+            </DefaultRolloverStrategy>
+        </RollingFile>
+    </Appenders>
+
+    <Loggers>
+        <logger name="com.ercot" level="debug" />
+        <Root level="error">
+            <AppenderRef ref="tasks"/>
+            <AppenderRef ref="console"/>
+        </Root>
+    </Loggers>
+</Configuration>

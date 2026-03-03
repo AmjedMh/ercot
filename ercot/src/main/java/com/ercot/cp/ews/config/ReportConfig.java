@@ -9,4 +9,5 @@ public class ReportConfig {
     private String cron;
     private String name;
     private String reportDuration;
+    private String startDate;
 }
