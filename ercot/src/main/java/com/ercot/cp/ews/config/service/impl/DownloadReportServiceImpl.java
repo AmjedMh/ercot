@@ -9,6 +9,7 @@ import com.ercot.cp.ews.config.dto.RTMReportDTO;
 import com.ercot.cp.ews.config.service.DMPReportService;
 import com.ercot.cp.ews.config.service.DownloadReportService;
 import com.ercot.cp.ews.config.service.RTMReportService;
+import com.ercot.cp.ews.config.service.WindGeoReportService;
 import com.ercot.cp.ews.config.util.CommonHelper;
 import com.ercot.schema._2007_06.nodal.ews.message.HeaderType;
 import com.ercot.schema._2007_06.nodal.ews.message.ReplayDetectionType;
@@ -83,6 +84,7 @@ public class DownloadReportServiceImpl implements DownloadReportService {
     private final SystemConfiguration systemConfiguration;
     private final RTMReportService rtmReportService;
     private final DMPReportService dmpReportService;
+    private final WindGeoReportService windGeoReportService;
 
     @SneakyThrows
     private void downloadFile(Report report, String reportDuration) {
@@ -315,6 +317,9 @@ public class DownloadReportServiceImpl implements DownloadReportService {
                 break;
             case "DMPReportDTO":
                 dmpReportService.processDTMListingsData(reportRows);
+                break;
+            case "WindGeoReportDTO":
+                windGeoReportService.processWindGeoData(reportRows);
                 break;
             default:
                 log.warn("convertReport: no DB handler registered for DTO type: [{}] - {} rows NOT saved", dtoType, reportRows.size());

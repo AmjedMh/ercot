@@ -3,6 +3,7 @@ package com.ercot.cp.ews.config.constants;
 import com.ercot.cp.ews.config.domin.DMPReport;
 import com.ercot.cp.ews.config.dto.DMPReportDTO;
 import com.ercot.cp.ews.config.dto.RTMReportDTO;
+import com.ercot.cp.ews.config.dto.WindGeoReportDTO;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -12,6 +13,7 @@ public class ConstantCodes {
     public static final Map<String, Class> REPORT_CLASS = new HashMap<>() {{
         put("DAM Settlement Point Prices", DMPReportDTO.class);
         put("Settlement Point Prices at Resource Nodes, Hubs and Load Zones", RTMReportDTO.class);
+        put("Wind Power Production - Hourly Averaged Actual and Forecasted Values by Geographical Region", WindGeoReportDTO.class);
     }};
 
     public static final String DOWNLOAD_REPORT = "DOWNLOAD_REPORT";
