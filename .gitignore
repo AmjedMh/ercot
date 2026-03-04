@@ -3,3 +3,24 @@
 
 # JetBrains IDEs
 .idea/
+
+# Certificates & keystores
+*.jks
+*.p12
+*.pfx
+*.pem
+*.cer
+*.crt
+*.key
+old cert/
+
+# Java build artifacts
+*.jar
+*.war
+*.class
+target/
+
+# Archives
+*.zip
+*.gz
+*.tar
