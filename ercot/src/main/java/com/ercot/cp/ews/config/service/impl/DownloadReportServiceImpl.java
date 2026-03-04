@@ -116,6 +116,11 @@ public class DownloadReportServiceImpl implements DownloadReportService {
             for (Enumeration<? extends ZipEntry> e = zip.entries(); e.hasMoreElements(); ) {
                 ZipEntry entry = e.nextElement();
 
+                if (entry.getName().endsWith(".xml")) {
+                    log.debug("zipReport: skipping XML entry: {} in file: {}", entry.getName(), fileNameDirectory);
+                    continue;
+                }
+
                 InputStream in = zip.getInputStream(entry);
                 Reader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.ISO_8859_1));
                 CsvToBean<T> csvAmazonData = new CsvToBeanBuilder<T>(reader)
@@ -332,7 +337,7 @@ public class DownloadReportServiceImpl implements DownloadReportService {
 
         if (directory.exists() && directory.isDirectory()) {
             return Arrays.asList(Objects.requireNonNull(directory.list((dir, name) ->
-                name.endsWith(".zip")          // standard .zip
+                (name.endsWith(".zip") && !name.endsWith("_xml.zip"))  // standard .zip, exclude XML archives
                 || name.endsWith(".csv")        // standard .csv
                 || name.endsWith("_csv")        // ERCOT extensionless csv-zip (e.g. ..._0000_csv)
             )));
