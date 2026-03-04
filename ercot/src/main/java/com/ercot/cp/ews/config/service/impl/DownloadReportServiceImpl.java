@@ -101,10 +101,10 @@ public class DownloadReportServiceImpl implements DownloadReportService {
     }
 
     private <T> void zipReport(String reportName, String fileNameDirectory) {
-        log.debug("Inside zipReport reportName: {} fileNameDirectory: {}", reportName, fileNameDirectory);
+        log.info("Inside zipReport reportName: {} fileNameDirectory: {}", reportName, fileNameDirectory);
         Class<T> aClass = REPORT_CLASS.get(reportName);
         if (aClass == null) {
-            log.debug("No DTO mapping found for reportName: {} - skipping zipReport for: {}", reportName, fileNameDirectory);
+            log.warn("No DTO mapping found for reportName: [{}] - skipping zipReport for: {}. Add this report to REPORT_CLASS to enable DB persistence.", reportName, fileNameDirectory);
             return;
         }
         List<T> reportRows;
@@ -124,9 +124,13 @@ public class DownloadReportServiceImpl implements DownloadReportService {
                     .withIgnoreEmptyLine(true)
                     .build();
                 reportRows = csvAmazonData.parse();
-                log.debug("reportRows: {}", reportRows.size());
+                log.info("zipReport parsed {} rows from entry: {} in file: {}", reportRows.size(), entry.getName(), fileNameDirectory);
 
-                convertReport(reportRows);
+                if (reportRows.isEmpty()) {
+                    log.warn("zipReport: 0 rows parsed from entry: {} - skipping DB write", entry.getName());
+                } else {
+                    convertReport(reportRows);
+                }
                 reader.close();
             }
         } catch (Exception exception) {
@@ -228,38 +232,50 @@ public class DownloadReportServiceImpl implements DownloadReportService {
 
         TemporalAmount increment = getTimeDuration(reportData.getReportDuration());
 
+        int totalFilesProcessed = 0;
+
         for (LocalDateTime currentDate = startDate; currentDate.isBefore(endDate) || currentDate.isEqual(endDate); currentDate = currentDate.plus(increment)) {
 
             String baseDirectory = systemConfiguration.getFolderPath() + File.separator + reportData.getReportName() + File.separator;
             baseDirectory += getDirectory(reportData.getReportDuration(), currentDate);
-            log.debug("baseDirectory: {}", baseDirectory);
+            log.info("dumpReport scanning directory: {}", baseDirectory);
 
             List<String> reportFiles = getReportFiles(baseDirectory);
-            log.debug("reportFiles: {} ", reportFiles.size());
+            log.info("dumpReport found {} file(s) in directory: {}", reportFiles.size(), baseDirectory);
 
+            if (reportFiles.isEmpty()) {
+                log.warn("dumpReport: no files found for date {} in directory: {}", currentDate, baseDirectory);
+                continue;
+            }
+
+            totalFilesProcessed += reportFiles.size();
             String finalBaseDirectory = baseDirectory;
             ThreadPoolExecutor threadPoolExecutor = CommonHelper.getThreadPoolExecutor(DOWNLOAD_REPORT);
 
             reportFiles.forEach(reportFile -> threadPoolExecutor.execute(() -> {
                 String fileNameDirectory = finalBaseDirectory + "/" + reportFile;
-
-                if (reportFile.endsWith(".zip") || reportFile.endsWith("_csv")) {
-                    // .zip files and ERCOT extensionless _csv files are both zip-compressed
-                    zipReport(reportData.getReportName(), fileNameDirectory);
-                } else {
-                    csvReport(reportData.getReportName(), fileNameDirectory);
+                log.info("dumpReport processing file: {}", fileNameDirectory);
+                try {
+                    if (reportFile.endsWith(".zip") || reportFile.endsWith("_csv")) {
+                        // .zip files and ERCOT extensionless _csv files are both zip-compressed
+                        zipReport(reportData.getReportName(), fileNameDirectory);
+                    } else {
+                        csvReport(reportData.getReportName(), fileNameDirectory);
+                    }
+                } catch (Exception e) {
+                    log.error("dumpReport: unhandled exception processing file: {} - error: {}", fileNameDirectory, e.getMessage(), e);
                 }
             }));
             new CommonHelper().waitForExecutorToCompleteTasks(threadPoolExecutor);
         }
-        log.debug("Leaving dumpReport");
+        log.info("Leaving dumpReport - total files submitted for processing: {}", totalFilesProcessed);
     }
 
     private <T> void csvReport(String reportName, String fileNameDirectory) {
-        log.debug("Inside csvReport reportName: {} fileNameDirectory: {}", reportName, fileNameDirectory);
+        log.info("Inside csvReport reportName: {} fileNameDirectory: {}", reportName, fileNameDirectory);
         Class<T> aClass = REPORT_CLASS.get(reportName);
         if (aClass == null) {
-            log.debug("No DTO mapping found for reportName: {} - skipping csvReport for: {}", reportName, fileNameDirectory);
+            log.warn("No DTO mapping found for reportName: [{}] - skipping csvReport for: {}. Add this report to REPORT_CLASS to enable DB persistence.", reportName, fileNameDirectory);
             return;
         }
         List<T> reportRows;
@@ -274,9 +290,12 @@ public class DownloadReportServiceImpl implements DownloadReportService {
                 .withIgnoreEmptyLine(true)
                 .build();
             reportRows = csvAmazonData.parse();
-            log.debug("reportRows: {}", reportRows.size());
+            log.info("csvReport parsed {} rows from file: {}", reportRows.size(), fileNameDirectory);
 
-            if (CollectionUtils.isEmpty(reportRows)) return;
+            if (CollectionUtils.isEmpty(reportRows)) {
+                log.warn("csvReport: 0 rows parsed from file: {} - skipping DB write", fileNameDirectory);
+                return;
+            }
 
             convertReport(reportRows);
             reader.close();
@@ -287,13 +306,18 @@ public class DownloadReportServiceImpl implements DownloadReportService {
     }
 
     public <T> void convertReport(List<T> reportRows) {
+        String dtoType = reportRows.get(0).getClass().getSimpleName();
+        log.info("convertReport dispatching {} rows of type: {}", reportRows.size(), dtoType);
 
-        switch (reportRows.get(0).getClass().getSimpleName()) {
+        switch (dtoType) {
             case "RTMReportDTO":
                 rtmReportService.processRTMListingsData(reportRows);
                 break;
             case "DMPReportDTO":
                 dmpReportService.processDTMListingsData(reportRows);
+                break;
+            default:
+                log.warn("convertReport: no DB handler registered for DTO type: [{}] - {} rows NOT saved", dtoType, reportRows.size());
                 break;
         }
     }

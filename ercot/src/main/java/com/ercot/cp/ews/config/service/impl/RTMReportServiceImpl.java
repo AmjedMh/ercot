@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Log4j2
 @Service
@@ -25,27 +26,38 @@ public class RTMReportServiceImpl implements RTMReportService {
     public <T> void processRTMListingsData(List<T> reportRows) {
 
         List<RTMReport> rtmReportList = new ArrayList<>();
+        AtomicInteger skippedNoMapping = new AtomicInteger(0);
+        AtomicInteger skippedEW = new AtomicInteger(0);
+
         reportRows.forEach(reportRow -> {
             final var row = ((RTMReportDTO) reportRow);
 
             Integer integer = ConstantCodes.sPPNodesMap
                                        .get(row.getSettlementPoint());
             if (integer == null) {
-                
-                //log.debug("skip Settlement : {}", row.getSettlementPoint());
+                skippedNoMapping.incrementAndGet();
+                log.debug("skip Settlement (not in sPPNodesMap): {}", row.getSettlementPoint());
                 return ;
             }
 
             boolean bPointType = row.getSettlementPointType()
                                     .endsWith("EW");
-            if (bPointType) return;
+            if (bPointType) {
+                skippedEW.incrementAndGet();
+                return;
+            }
 
             RTMReport rtmReport = rtmReportTransformer.toEntity(row);
-            
             rtmReportList.add(rtmReport);
         });
 
-        log.debug("processRTMListingsData rtmReportList: {}", rtmReportList.size());
-        rtmReportDataRepository.saveAll(rtmReportList);
+        log.info("processRTMListingsData: totalInput={} mapped={} skippedNoMapping={} skippedEW={}",
+                reportRows.size(), rtmReportList.size(), skippedNoMapping.get(), skippedEW.get());
+        if (!rtmReportList.isEmpty()) {
+            rtmReportDataRepository.saveAll(rtmReportList);
+            log.info("processRTMListingsData: saved {} rows to DB", rtmReportList.size());
+        } else {
+            log.warn("processRTMListingsData: 0 rows qualified for DB insert - check sPPNodesMap coverage");
+        }
     }
 }
