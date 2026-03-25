@@ -18,7 +18,7 @@ f.	bin folder
 Open command prompt and execute below commands
 
 keytool -importkeystore -srckeystore '1194326882000$API_TSQM1.pfx' -srcstoretype pkcs12 -srcstorepass 'uiOF5$WOg0tRf' -srcalias 'lcp_m1' -destkeystore bin/clientcert.jks -deststoretype jks -deststorepass 'uiOF5$WOg0tRf' -destalias clientcert -noprompt
-keytool -importkeystore -srckeystore '1194326882000$API_TSQSUB1.pfx' -srcstoretype pkcs12 -srcstorepass 'npOT##I1BqYjJ' -srcalias 'tsq_sub1' -destkeystore bin/clientcert_cp.jks -deststoretype jks -deststorepass 'npOT##I1BqYjJ' -destalias clientcert_cp -noprompt
+keytool -importkeystore -srckeystore '1194326889999$API_TSQCP.pfx' -srcstoretype pkcs12 -srcstorepass '7ko2__5Mue!Bc' -srcalias 'api_tsqcp' -destkeystore bin/clientcert_cp.jks -deststoretype jks -deststorepass '7ko2__5Mue!Bc' -destalias clientcert_cp -noprompt
 keytool -import -file "GlobalSign RSA Organization Validation CA - 2018.cer" -alias VeriSignUniversalRootCertificationAuthority -keystore bin/truststore.jks -storepass changeit -noprompt 
 keytool -import -file "GlobalSign Root R3.cer" -alias GlobalSignRootR3 -keystore bin/truststore.jks -storepass changeit  -noprompt 
 keytool -import -file "ERCOT_CA.cer" -alias ERCOT_CA -keystore bin/truststore.jks -storepass changeit  -noprompt 
@@ -30,4 +30,3 @@ cp ercot.jar ../../bin/ercot.jar
 5.	Update application.properties and application-cp.properties path
 6.	Go to bin folder and run ercot.bat
 7.	Also run ercot_cp.bat
-
