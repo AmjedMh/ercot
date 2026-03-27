@@ -63,10 +63,13 @@ import java.util.Arrays;
 import java.util.Date;
 import java.util.Enumeration;
 import java.util.GregorianCalendar;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.TimeZone;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
@@ -93,83 +96,165 @@ public class DownloadReportServiceImpl implements DownloadReportService {
     private final SevenDayLoadForecastReportService sevenDayLoadForecastReportService;
     private final HourlyResourceOutageCapacityReportService hourlyResourceOutageCapacityReportService;
 
-    @SneakyThrows
-    private void downloadFile(Report report, String reportDuration) {
-        log.debug("Inside downloadFile reportFileName: {} reportDuration: {}", report.getFileName(), reportDuration);
+    // Track download statistics for monitoring
+    private static class DownloadStats {
+        int attempted = 0;
+        int succeeded = 0;
+        int failed = 0;
+        long totalBytes = 0;
+        Map<String, String> failures = new ConcurrentHashMap<>();
+    }
 
-        String baseDirectory = systemConfiguration.getFolderPath() + File.separator + report.getReportGroup() + File.separator;
+    /**
+     * Download a file without processing it (to avoid blocking on DB operations).
+     * Processing will be done separately in batch after all downloads complete.
+     */
+    private boolean downloadFileOnly(Report report, String reportDuration, DownloadStats stats) {
+        stats.attempted++;
+        try {
+            log.debug("downloadFileOnly: fileName={} size={}", report.getFileName(), report.getSize());
 
-        baseDirectory += getDirectory(reportDuration, report.getCreated());
+            String baseDirectory = systemConfiguration.getFolderPath() + File.separator + 
+                                 report.getReportGroup() + File.separator;
+            baseDirectory += getDirectory(reportDuration, report.getCreated());
+            
+            Files.createDirectories(Paths.get(baseDirectory));
+            String fileNameDirectory = baseDirectory + File.separator + report.getFileName();
 
-        Files.createDirectories(Paths.get(baseDirectory));
-        String fileNameDirectory = baseDirectory + File.separator + report.getFileName();
-
-        downloadFileIfNotExists(fileNameDirectory, report.getURL(), report);
-
-        log.debug("Leaving downloadFile reportFileName: {}", report.getFileName());
+            // Download file only - no processing
+            long bytesDownloaded = downloadFileIfNotExists(fileNameDirectory, report.getURL(), report);
+            
+            if (bytesDownloaded > 0) {
+                stats.succeeded++;
+                stats.totalBytes += bytesDownloaded;
+                log.debug("downloadFileOnly: successfully downloaded {} ({} bytes)", 
+                         report.getFileName(), bytesDownloaded);
+                return true;
+            } else {
+                log.debug("downloadFileOnly: file already exists and is valid: {}", report.getFileName());
+                return true;  // File already exists, not a failure
+            }
+        } catch (Exception e) {
+            stats.failed++;
+            stats.failures.put(report.getFileName(), e.getMessage());
+            log.error("downloadFileOnly: FAILED to download {} - error: {}", 
+                     report.getFileName(), e.getMessage(), e);
+            return false;
+        }
     }
 
     private <T> void zipReport(String reportName, String fileNameDirectory) {
-        log.info("Inside zipReport reportName: {} fileNameDirectory: {}", reportName, fileNameDirectory);
+        log.info("zipReport START: reportName={} file={}", reportName, fileNameDirectory);
+        long startTime = System.currentTimeMillis();
+        
         Class<T> aClass = REPORT_CLASS.get(reportName);
         if (aClass == null) {
-            log.warn("No DTO mapping found for reportName: [{}] - skipping zipReport for: {}. Add this report to REPORT_CLASS to enable DB persistence.", reportName, fileNameDirectory);
+            log.warn("zipReport: No DTO mapping for reportName=[{}] - skipping DB persistence for: {}", 
+                    reportName, fileNameDirectory);
             return;
         }
-        List<T> reportRows;
 
         try (ZipFile zip = new ZipFile(fileNameDirectory)) {
-
+            int entriesProcessed = 0;
+            int csvEntriesFound = 0;
+            
             for (Enumeration<? extends ZipEntry> e = zip.entries(); e.hasMoreElements(); ) {
                 ZipEntry entry = e.nextElement();
+                entriesProcessed++;
 
                 if (entry.getName().endsWith(".xml")) {
                     log.debug("zipReport: skipping XML entry: {} in file: {}", entry.getName(), fileNameDirectory);
                     continue;
                 }
+                
+                csvEntriesFound++;
+                log.info("zipReport: processing CSV entry: {} from: {}", entry.getName(), fileNameDirectory);
 
-                InputStream in = zip.getInputStream(entry);
-                Reader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.ISO_8859_1));
-                CsvToBean<T> csvAmazonData = new CsvToBeanBuilder<T>(reader)
-                    .withSkipLines(1)
-                    .withSeparator(',')
-                    .withType(aClass)
-                    .withIgnoreQuotations(TRUE)
-                    .withIgnoreEmptyLine(true)
-                    .build();
-                reportRows = csvAmazonData.parse();
-                log.info("zipReport parsed {} rows from entry: {} in file: {}", reportRows.size(), entry.getName(), fileNameDirectory);
+                try (InputStream in = zip.getInputStream(entry);
+                     Reader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.ISO_8859_1))) {
+                    
+                    CsvToBean<T> csvAmazonData = new CsvToBeanBuilder<T>(reader)
+                        .withSkipLines(1)
+                        .withSeparator(',')
+                        .withType(aClass)
+                        .withIgnoreQuotations(TRUE)
+                        .withIgnoreEmptyLine(true)
+                        .build();
+                    
+                    List<T> reportRows = csvAmazonData.parse();
+                    log.info("zipReport: parsed {} rows from entry: {} in file: {}", 
+                            reportRows.size(), entry.getName(), fileNameDirectory);
 
-                if (reportRows.isEmpty()) {
-                    log.warn("zipReport: 0 rows parsed from entry: {} - skipping DB write", entry.getName());
-                } else {
-                    convertReport(reportRows);
+                    if (reportRows.isEmpty()) {
+                        log.warn("zipReport: 0 rows parsed from entry: {} - skipping DB write", entry.getName());
+                    } else {
+                        try {
+                            convertReport(reportRows);
+                            log.info("zipReport: successfully processed {} rows to DB from entry: {}", 
+                                    reportRows.size(), entry.getName());
+                        } catch (Exception dbEx) {
+                            log.error("zipReport: DATABASE ERROR processing {} rows from entry={} file={}: {}", 
+                                    reportRows.size(), entry.getName(), fileNameDirectory, dbEx.getMessage(), dbEx);
+                            // Continue to next entry even if DB fails
+                        }
+                    }
+                } catch (Exception entryEx) {
+                    log.error("zipReport: ERROR processing entry={} from file={}: {}", 
+                            entry.getName(), fileNameDirectory, entryEx.getMessage(), entryEx);
+                    // Continue to next entry
                 }
-                reader.close();
             }
+            
+            long duration = System.currentTimeMillis() - startTime;
+            log.info("zipReport END: file={} entriesProcessed={} csvProcessed={} duration={}ms", 
+                    fileNameDirectory, entriesProcessed, csvEntriesFound, duration);
+                    
         } catch (Exception exception) {
-            log.error("Exception while zipReport fileNameDirectory: {} exception: {}", fileNameDirectory, exception.getMessage(), exception);
+            log.error("zipReport: CRITICAL ERROR opening/reading zip file={}: {}", 
+                    fileNameDirectory, exception.getMessage(), exception);
         }
     }
 
-    private void downloadFileIfNotExists(String filePath, String url, Report report) throws IOException {
+    private long downloadFileIfNotExists(String filePath, String url, Report report) throws IOException {
         File file = new File(filePath);
         long lSize = file.exists() ? file.length() : -1;
         long expectedSize = report.getSize();
 
         if (expectedSize != lSize) {
-            HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
-            conn.setConnectTimeout(30_000);  // 30 s to establish TCP connection
-            conn.setReadTimeout(120_000);    // 120 s max to receive data between packets
-            InputStream in = conn.getInputStream();
-            long lSizeDownload = Files.copy(in, Paths.get(filePath), StandardCopyOption.REPLACE_EXISTING);
-            log.debug("lSizeDownload: {}", lSizeDownload);
-
-            if (report.getFileName().contains("xml") || !REPORT_CLASS.containsKey(report.getReportGroup())) {
-                log.debug("Leaving downloadFile getFileName: {} ", report.getFileName());
-                return;
+            log.info("downloadFileIfNotExists: downloading {} (expected size: {} bytes)", 
+                    report.getFileName(), expectedSize);
+            
+            HttpURLConnection conn = null;
+            InputStream in = null;
+            try {
+                conn = (HttpURLConnection) new URL(url).openConnection();
+                conn.setConnectTimeout(30_000);  // 30s to establish TCP connection
+                conn.setReadTimeout(120_000);    // 120s max to receive data between packets
+                
+                in = conn.getInputStream();
+                long lSizeDownload = Files.copy(in, Paths.get(filePath), StandardCopyOption.REPLACE_EXISTING);
+                
+                log.info("downloadFileIfNotExists: downloaded {} bytes for {}", 
+                        lSizeDownload, report.getFileName());
+                
+                // Verify downloaded size matches expected
+                if (lSizeDownload != expectedSize) {
+                    log.warn("downloadFileIfNotExists: SIZE MISMATCH for {} - expected {} but got {} bytes", 
+                            report.getFileName(), expectedSize, lSizeDownload);
+                }
+                
+                return lSizeDownload;
+            } finally {
+                if (in != null) {
+                    try { in.close(); } catch (IOException ignored) {}
+                }
+                if (conn != null) {
+                    conn.disconnect();
+                }
             }
-            zipReport(report.getReportGroup(), filePath);
+        } else {
+            log.debug("downloadFileIfNotExists: file already exists with correct size: {}", filePath);
+            return 0;  // Already exists
         }
     }
 
@@ -211,39 +296,88 @@ public class DownloadReportServiceImpl implements DownloadReportService {
 
     @Override
     public void downloadReport(ReportConfig reportConfig) {
-        log.debug("Inside downloadReport reportName: {}", reportConfig.getName());
+        log.info("=== downloadReport START: {} ===", reportConfig.getName());
+        long startTime = System.currentTimeMillis();
+        DownloadStats stats = new DownloadStats();
 
         try {
             RequestMessage requestRequest = formRequest(reportConfig);
-            System.out.println("after request creation !!");
+            log.debug("downloadReport: SOAP request created for {}", reportConfig.getName());
+            
             ResponseMessage responseMessage = ewsClient.callEWS(soap_address, soap_action_market_info, requestRequest);
             List<Element> elementList = responseMessage.getPayload().getAny();
 
             if (elementList == null || elementList.isEmpty()) {
-                log.debug("Leaving downloadReport report not found reportName: {}", reportConfig.getName());
+                log.warn("downloadReport: NO REPORTS FOUND for {}", reportConfig.getName());
                 return;
             }
 
             Document document = elementList.get(0).getOwnerDocument();
-
             DOMImplementationLS domImplLS = (DOMImplementationLS) document.getImplementation();
             LSSerializer serializer = domImplLS.createLSSerializer();
             String str = serializer.writeToString(elementList.get(0));
 
             List<Report> reportList = parseXml(str);
-            reportList.forEach(report -> {
-                try {
-                    downloadFile(report, reportConfig.getReportDuration());
-                } catch (Exception e) {
-                    log.error("Failed to download file: {} error: {}", report.getFileName(), e.getMessage(), e);
+            log.info("downloadReport: found {} file(s) to download for {}", 
+                    reportList.size(), reportConfig.getName());
+            
+            // PHASE 1: Download ALL files (fast, no DB blocking)
+            log.info("downloadReport: PHASE 1 - Downloading {} files...", reportList.size());
+            reportList.forEach(report -> downloadFileOnly(report, reportConfig.getReportDuration(), stats));
+            
+            long downloadDuration = System.currentTimeMillis() - startTime;
+            log.info("downloadReport: PHASE 1 COMPLETE - attempted={} succeeded={} failed={} totalMB={} durationMs={}",
+                    stats.attempted, stats.succeeded, stats.failed, 
+                    stats.totalBytes / 1_048_576, downloadDuration);
+            
+            if (!stats.failures.isEmpty()) {
+                log.error("downloadReport: {} DOWNLOAD FAILURES:", stats.failures.size());
+                stats.failures.forEach((fileName, error) -> 
+                    log.error("  - {}: {}", fileName, error));
+            }
+            
+            // PHASE 2: Process downloaded CSV files (DB operations separate from download)
+            // This runs AFTER all downloads complete, so partial failures don't block everything
+            log.info("downloadReport: PHASE 2 - Processing CSV files for DB insertion...");
+            long processStartTime = System.currentTimeMillis();
+            int processedCount = 0;
+            
+            for (Report report : reportList) {
+                // Only process CSV files that were successfully downloaded
+                if (!report.getFileName().contains("xml") && 
+                    REPORT_CLASS.containsKey(report.getReportGroup()) &&
+                    !stats.failures.containsKey(report.getFileName())) {
+                    
+                    try {
+                        String baseDirectory = systemConfiguration.getFolderPath() + File.separator + 
+                                             report.getReportGroup() + File.separator;
+                        baseDirectory += getDirectory(reportConfig.getReportDuration(), report.getCreated());
+                        String filePath = baseDirectory + File.separator + report.getFileName();
+                        
+                        log.info("downloadReport: processing CSV file for DB: {}", report.getFileName());
+                        zipReport(report.getReportGroup(), filePath);
+                        processedCount++;
+                    } catch (Exception e) {
+                        log.error("downloadReport: FAILED to process CSV {} to DB: {}", 
+                                report.getFileName(), e.getMessage(), e);
+                        // Continue processing other files
+                    }
                 }
-            });
+            }
+            
+            long processDuration = System.currentTimeMillis() - processStartTime;
+            long totalDuration = System.currentTimeMillis() - startTime;
+            
+            log.info("downloadReport: PHASE 2 COMPLETE - processed {} CSV files in {}ms", 
+                    processedCount, processDuration);
+            log.info("=== downloadReport END: {} - Total time: {}ms ===", 
+                    reportConfig.getName(), totalDuration);
 
         } catch (Exception exception) {
-            log.error("Exception occurred while downloadReport. Error Message: {}", exception.getMessage(), exception);
+            log.error("downloadReport: CRITICAL ERROR for {}: {}", 
+                     reportConfig.getName(), exception.getMessage(), exception);
+            throw new RuntimeException("Download report failed: " + reportConfig.getName(), exception);
         }
-
-        log.debug("Leaving downloadReport reportName: {}", reportConfig.getName());
     }
 
     @Override
@@ -295,16 +429,19 @@ public class DownloadReportServiceImpl implements DownloadReportService {
     }
 
     private <T> void csvReport(String reportName, String fileNameDirectory) {
-        log.info("Inside csvReport reportName: {} fileNameDirectory: {}", reportName, fileNameDirectory);
+        log.info("csvReport START: reportName={} file={}", reportName, fileNameDirectory);
+        long startTime = System.currentTimeMillis();
+        
         Class<T> aClass = REPORT_CLASS.get(reportName);
         if (aClass == null) {
-            log.warn("No DTO mapping found for reportName: [{}] - skipping csvReport for: {}. Add this report to REPORT_CLASS to enable DB persistence.", reportName, fileNameDirectory);
+            log.warn("csvReport: No DTO mapping for reportName=[{}] - skipping DB persistence for: {}", 
+                    reportName, fileNameDirectory);
             return;
         }
-        List<T> reportRows;
-        try {
-            InputStream inputStream = new FileInputStream(fileNameDirectory);
-            Reader reader = new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.ISO_8859_1));
+        
+        try (InputStream inputStream = new FileInputStream(fileNameDirectory);
+             Reader reader = new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.ISO_8859_1))) {
+            
             CsvToBean<T> csvAmazonData = new CsvToBeanBuilder<T>(reader)
                 .withSkipLines(1)
                 .withSeparator(',')
@@ -312,19 +449,30 @@ public class DownloadReportServiceImpl implements DownloadReportService {
                 .withIgnoreQuotations(TRUE)
                 .withIgnoreEmptyLine(true)
                 .build();
-            reportRows = csvAmazonData.parse();
-            log.info("csvReport parsed {} rows from file: {}", reportRows.size(), fileNameDirectory);
+            
+            List<T> reportRows = csvAmazonData.parse();
+            log.info("csvReport: parsed {} rows from file: {}", reportRows.size(), fileNameDirectory);
 
             if (CollectionUtils.isEmpty(reportRows)) {
                 log.warn("csvReport: 0 rows parsed from file: {} - skipping DB write", fileNameDirectory);
                 return;
             }
 
-            convertReport(reportRows);
-            reader.close();
-            inputStream.close();
+            try {
+                convertReport(reportRows);
+                long duration = System.currentTimeMillis() - startTime;
+                log.info("csvReport END: successfully processed {} rows to DB from file={} duration={}ms", 
+                        reportRows.size(), fileNameDirectory, duration);
+            } catch (Exception dbEx) {
+                log.error("csvReport: DATABASE ERROR processing {} rows from file={}: {}", 
+                        reportRows.size(), fileNameDirectory, dbEx.getMessage(), dbEx);
+                throw dbEx;  // Re-throw to signal failure
+            }
+            
         } catch (Exception exception) {
-            log.error("Exception occurred csvReport fileNameDirectory: {} exception: {} ", fileNameDirectory, exception.getMessage(), exception);
+            log.error("csvReport: ERROR reading/parsing CSV file={}: {}", 
+                    fileNameDirectory, exception.getMessage(), exception);
+            throw new RuntimeException("Failed to process CSV report: " + fileNameDirectory, exception);
         }
     }
 

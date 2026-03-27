@@ -7,7 +7,9 @@ import com.ercot.cp.ews.config.service.RTMReportService;
 import com.ercot.cp.ews.config.transformer.RTMReportTransformer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -22,7 +24,10 @@ public class RTMReportServiceImpl implements RTMReportService {
     private final RTMReportDataRepository rtmReportDataRepository;
 
     @Override
+    @Transactional(timeout = 300)  // 5 minutes timeout to prevent infinite hang
     public <T> void processRTMListingsData(List<T> reportRows) {
+        long startTime = System.currentTimeMillis();
+        log.info("processRTMListingsData: starting with {} input rows", reportRows.size());
 
         List<RTMReport> rtmReportList = new ArrayList<>();
         AtomicInteger skippedEW = new AtomicInteger(0);
@@ -43,11 +48,25 @@ public class RTMReportServiceImpl implements RTMReportService {
 
         log.info("processRTMListingsData: totalInput={} saved={} skippedEW={}",
                 reportRows.size(), rtmReportList.size(), skippedEW.get());
-        if (!rtmReportList.isEmpty()) {
-            rtmReportDataRepository.saveAll(rtmReportList);
-            log.info("processRTMListingsData: saved {} rows to DB", rtmReportList.size());
-        } else {
+        
+        if (rtmReportList.isEmpty()) {
             log.warn("processRTMListingsData: 0 rows qualified for DB insert (all were EW type)");
+            return;
+        }
+
+        try {
+            rtmReportDataRepository.saveAll(rtmReportList);
+            long duration = System.currentTimeMillis() - startTime;
+            log.info("processRTMListingsData: successfully saved {} rows to DB in {}ms", 
+                    rtmReportList.size(), duration);
+        } catch (QueryTimeoutException e) {
+            log.error("processRTMListingsData: DATABASE TIMEOUT after 300s - saved 0/{} rows. Check DB connection!", 
+                    rtmReportList.size(), e);
+            throw new RuntimeException("Database operation timed out", e);
+        } catch (Exception e) {
+            log.error("processRTMListingsData: DATABASE ERROR saving {}/{} rows: {}", 
+                    rtmReportList.size(), reportRows.size(), e.getMessage(), e);
+            throw new RuntimeException("Database save failed", e);
         }
     }
 }
