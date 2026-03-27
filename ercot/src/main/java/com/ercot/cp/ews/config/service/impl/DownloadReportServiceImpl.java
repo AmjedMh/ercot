@@ -47,6 +47,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
+import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -157,7 +158,10 @@ public class DownloadReportServiceImpl implements DownloadReportService {
         long expectedSize = report.getSize();
 
         if (expectedSize != lSize) {
-            InputStream in = new URL(url).openStream();
+            HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+            conn.setConnectTimeout(30_000);  // 30 s to establish TCP connection
+            conn.setReadTimeout(120_000);    // 120 s max to receive data between packets
+            InputStream in = conn.getInputStream();
             long lSizeDownload = Files.copy(in, Paths.get(filePath), StandardCopyOption.REPLACE_EXISTING);
             log.debug("lSizeDownload: {}", lSizeDownload);
 
@@ -227,7 +231,13 @@ public class DownloadReportServiceImpl implements DownloadReportService {
             String str = serializer.writeToString(elementList.get(0));
 
             List<Report> reportList = parseXml(str);
-            reportList.forEach(report -> downloadFile(report, reportConfig.getReportDuration()));
+            reportList.forEach(report -> {
+                try {
+                    downloadFile(report, reportConfig.getReportDuration());
+                } catch (Exception e) {
+                    log.error("Failed to download file: {} error: {}", report.getFileName(), e.getMessage(), e);
+                }
+            });
 
         } catch (Exception exception) {
             log.error("Exception occurred while downloadReport. Error Message: {}", exception.getMessage(), exception);
