@@ -1,1 +1,1 @@
-java -Dspring.config.additional-location="application-cp.properties" -jar ercot.jar 
+java "--add-opens=java.xml.crypto/com.sun.org.apache.xml.internal.security=ALL-UNNAMED" "--add-opens=java.xml.crypto/com.sun.org.apache.xml.internal.security.utils=ALL-UNNAMED" "-Dspring.config.additional-location=%~dp0application-cp.properties" -jar "%~dp0ercot.jar"
