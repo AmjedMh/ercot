@@ -119,6 +119,7 @@ public class EwsConfiguration {
         securityInterceptor.setCallbackHandler(handler);
         securityInterceptor
                 .setPolicyConfiguration(new ClassPathResource(systemConfiguration.getSecurityPolicyFileName()));
+        securityInterceptor.setValidateResponse(false);
         System.out.println("XwsSecurityInterceptor configured successfully");
         return securityInterceptor;
     }
