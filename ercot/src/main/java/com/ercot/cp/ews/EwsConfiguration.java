@@ -15,6 +15,8 @@ import org.springframework.ws.client.support.interceptor.ClientInterceptor;
 import org.springframework.ws.soap.security.support.KeyStoreFactoryBean;
 import org.springframework.ws.soap.security.xwss.XwsSecurityInterceptor;
 import org.springframework.ws.soap.security.xwss.callback.KeyStoreCallbackHandler;
+import org.springframework.ws.transport.http.HttpUrlConnectionMessageSender;
+import java.time.Duration;
 
 import static org.quartz.TriggerKey.triggerKey;
 import javax.annotation.PostConstruct;
@@ -127,6 +129,12 @@ public class EwsConfiguration {
         client.setMarshaller(marshaller);
         client.setUnmarshaller(marshaller);
         client.setInterceptors(new ClientInterceptor[] { securityInterceptor() });
+
+        HttpUrlConnectionMessageSender messageSender = new HttpUrlConnectionMessageSender();
+        messageSender.setConnectionTimeout(Duration.ofSeconds(30));  // 30s to establish TCP connection
+        messageSender.setReadTimeout(Duration.ofSeconds(120));       // 120s to wait for SOAP response
+        client.setMessageSender(messageSender);
+
         return client;
     }
 
